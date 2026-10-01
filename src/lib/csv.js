@@ -4,23 +4,21 @@ export function csvText(rows) {
   return rows.map(r => r.map(q).join(',')).join('\n');
 }
 
-export function employeesCsv(store) {
-  const rows = [['code', 'name', 'designation', 'department', 'cnic', 'phone', 'whatsapp', 'doj', 'basic', 'shift', 'status']];
-  for (const e of store.employees || []) {
-    const d = (store.departments || []).find(x => x.id === e.department_id);
-    const sh = (store.shifts || []).find(x => x.id === e.shift_id);
-    rows.push([e.code, e.name, e.designation || '', d?.name || '', e.cnic || '', e.phone || '', e.whatsapp || '', e.doj || '', e.basic || 0, sh?.name || '', e.status || 'active']);
+export function tenantsCsv(store) {
+  const rows = [['tenant', 'property', 'unit', 'phone', 'whatsapp', 'rent', 'deposit', 'moved_in', 'status', 'outstanding']];
+  for (const t of store.tenants || []) {
+    const u = (store.units || []).find(x => x.id === t.unit_id);
+    const p = u && (store.properties || []).find(x => x.id === u.property_id);
+    const owes = (store.bills || []).filter(b => b.tenant_id === t.id && b.status !== 'void')
+      .reduce((x, b) => x + Math.max(0, (b.total || 0) - (store.receipts || []).filter(r => r.bill_id === b.id && r.status !== 'void').reduce((y, r) => y + (r.amount || 0), 0)), 0);
+    rows.push([t.name, p?.name || '', u?.code || '', t.phone || '', t.whatsapp || '', t.rent || 0, t.deposit || 0, t.moved_in || '', t.status || 'active', owes]);
   }
   return csvText(rows);
 }
 
-export function punchesCsvTemplate() {
-  return csvText([['code', 'date', 'in', 'out'], ['E001', '2026-10-01', '09:05', '17:40'], ['E002', '2026-10-01', '09:12', '17:10']]);
-}
-
-function splitter(text) {
+export function parseTenantsCsv(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
-  if (!lines.length) return null;
+  if (!lines.length) return { rows: [], errors: ['empty file'] };
   const sep = lines[0].includes('\t') ? '\t' : ',';
   const split = l => {
     if (sep === '\t') return l.split('\t').map(x => x.trim());
@@ -34,50 +32,18 @@ function splitter(text) {
     }
     out.push(cur); return out.map(x => x.trim());
   };
-  return { lines, split };
-}
-
-// Punch import: code,date,in,out — date YYYY-MM-DD, times HH:MM. A row with no
-// in/out marks absent. Re-importing a date replaces that date's imported rows.
-export function parsePunchesCsv(store, text) {
-  const p = splitter(text);
-  if (!p) return { rows: [], errors: ['empty file'] };
-  const head = p.split(p.lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
+  const head = split(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
   const col = n => head.indexOf(n);
   const rows = [], errors = [];
-  const timeOk = t => !t || /^\d{1,2}:\d{2}$/.test(t);
-  p.lines.slice(1).forEach((l, i) => {
-    const c = p.split(l);
+  lines.slice(1).forEach((l, i) => {
+    const c = split(l);
     const get = n => col(n) >= 0 ? (c[col(n)] || '') : '';
-    const e = empLookup(store, get('code') || get('emp') || get('id'));
-    if (!e) { errors.push(`row ${i + 2}: unknown employee code "${get('code')}" — skipped`); return; }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(get('date'))) { errors.push(`row ${i + 2}: bad date — skipped`); return; }
-    if (!timeOk(get('in')) || !timeOk(get('out'))) { errors.push(`row ${i + 2}: bad time — skipped`); return; }
-    rows.push({ employee_id: e.id, code: e.code, name: e.name, date: get('date'), in: get('in'), out: get('out') });
-  });
-  return { rows, errors };
-}
-function empLookup(store, code) {
-  const c = String(code || '').trim().toLowerCase();
-  return (store.employees || []).find(e => String(e.code || '').toLowerCase() === c) || null;
-}
-
-export function parseEmployeesCsv(text) {
-  const p = splitter(text);
-  if (!p) return { rows: [], errors: ['empty file'] };
-  const head = p.split(p.lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
-  const col = n => head.indexOf(n);
-  const rows = [], errors = [];
-  p.lines.slice(1).forEach((l, i) => {
-    const c = p.split(l);
-    const get = n => col(n) >= 0 ? (c[col(n)] || '') : '';
-    if (!get('name')) { errors.push(`row ${i + 2}: name missing — skipped`); return; }
+    if (!get('name') && !get('tenant')) { errors.push(`row ${i + 2}: name missing — skipped`); return; }
     rows.push({
       line: i + 2,
-      code: get('code'), name: get('name'), designation: get('designation'),
-      deptName: get('department'), cnic: get('cnic'), phone: get('phone'),
-      whatsapp: get('whatsapp') || get('phone'), doj: get('doj'),
-      basic: get('basic'), shiftName: get('shift'), address: get('address')
+      name: get('name') || get('tenant'), phone: get('phone'), whatsapp: get('whatsapp') || get('phone'),
+      unitCode: get('unit') || get('unit_code'), rent: get('rent'), deposit: get('deposit'),
+      moved_in: get('moved_in') || get('since'), cnic: get('cnic')
     });
   });
   return { rows, errors };

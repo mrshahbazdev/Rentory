@@ -20,7 +20,7 @@ function LanConnect({ st, mut }) {
           setInfo({ ...info, enabled: r.enabled, error: r.error });
           refresh();
         }} />
-        Share Attendory on this WiFi — other office PCs open it in a browser; all data saves on THIS computer
+        Share Rentory on this WiFi — other office PCs open it in a browser; all data saves on THIS computer
       </label>
       {info.error && <div style={{ color: '#dc2626', marginTop: 6 }}>⚠ Could not start sharing: {info.error}</div>}
       {info.enabled && (<>
@@ -62,7 +62,7 @@ export default function SettingsPanel({ store, update, setStore }) {
 
   return (
     <div className="panel">
-      <h2 className="ptitle">Company &amp; payroll rules</h2>
+      <h2 className="ptitle">Company &amp; billing rules</h2>
       <div className="form" style={{ marginBottom: 16 }}>
         <div className="frow">
           <input className="in" style={{ flex: 1 }} value={st.companyName || ''} placeholder="Company name" onChange={e => mut(x => x.companyName = e.target.value)} />
@@ -73,21 +73,21 @@ export default function SettingsPanel({ store, update, setStore }) {
           <input className="in" style={{ flex: 1 }} value={st.companyAddress || ''} placeholder="Address (prints on payslips)" onChange={e => mut(x => x.companyAddress = e.target.value)} />
         </div>
         <div className="frow">
-          <input className="in" style={{ flex: 1 }} value={st.salaryFooter || ''} placeholder="Payslip footer note" onChange={e => mut(x => x.salaryFooter = e.target.value)} />
+          <input className="in" style={{ flex: 1 }} value={st.receiptFooter || ''} placeholder="Receipt footer note" onChange={e => mut(x => x.receiptFooter = e.target.value)} />
           <label className="chk"><input type="checkbox" checked={!!st.uiUrdu} onChange={e => mut(x => x.uiUrdu = e.target.checked)} /> Urdu interface</label>
         </div>
         <div className="frow">
-          <label className="lbl">Working days / month (daily wage divisor)
-            <input className="in" style={{ width: 110 }} type="number" min="1" max="31" value={st.workingDays || 26} onChange={e => mut(x => x.workingDays = Number(e.target.value) || 26)} /></label>
-          <label className="lbl">Overtime rate multiplier
-            <input className="in" style={{ width: 110 }} type="number" step="0.25" min="1" value={st.otMultiplier || 1.5} onChange={e => mut(x => x.otMultiplier = Number(e.target.value) || 1.5)} /></label>
+          <label className="lbl">Bill due day of month
+            <input className="in" style={{ width: 110 }} type="number" min="1" max="28" value={st.dueDay || 10} onChange={e => mut(x => x.dueDay = Number(e.target.value) || 10)} /></label>
+          <label className="lbl">Late fee (flat, next bill)
+            <input className="in" style={{ width: 110 }} type="number" min="0" value={st.lateFee || 0} onChange={e => mut(x => x.lateFee = Number(e.target.value) || 0)} /></label>
           <label className="lbl">Letterhead offset (mm)
             <input className="in" style={{ width: 110 }} type="number" min="0" value={st.letterheadOffset || 0} onChange={e => mut(x => x.letterheadOffset = Number(e.target.value) || 0)} /></label>
         </div>
       </div>
 
       <h2 className="ptitle">Users, PINs &amp; roles</h2>
-      <p className="muted" style={{ marginTop: 0 }}>Add users to lock the app with a PIN. Roles: <b>hr</b> (everything), <b>accountant</b> (payroll & loans), <b>supervisor</b> (attendance & leaves, no money), <b>clerk</b> (records & marking only). Leave empty for no login.</p>
+      <p className="muted" style={{ marginTop: 0 }}>Add users to lock the app with a PIN. Roles: <b>owner</b> (everything), <b>manager</b> (bills, receipts & meters), <b>collector</b> (receive payments & meters only), <b>clerk</b> (units & tenant records only). Leave empty for no login.</p>
       <table className="grid" style={{ marginBottom: 10 }}>
         <thead><tr><th>Name</th><th>Role</th><th>PIN (4-6 digits)</th><th></th></tr></thead>
         <tbody>
@@ -103,17 +103,17 @@ export default function SettingsPanel({ store, update, setStore }) {
         </tbody>
       </table>
       <div className="frow" style={{ marginBottom: 14 }}>
-        <button className="btn small ghost" onClick={() => mut(x => { x.users = x.users || []; x.users.push({ id: 'u' + Date.now(), name: 'Office staff', role: 'clerk', pin: '0000' }); })}>+ User</button>
+        <button className="btn small ghost" onClick={() => mut(x => { x.users = x.users || []; x.users.push({ id: 'u' + Date.now(), name: 'Office staff', role: 'collector', pin: '0000' }); })}>+ User</button>
       </div>
 
-      <h2 className="ptitle">Local connection — use Attendory on a second PC</h2>
+      <h2 className="ptitle">Local connection — use Rentory on a second PC</h2>
       <LanConnect st={st} mut={mut} />
 
       <h2 className="ptitle">Backups &amp; sync</h2>
       <div className="frow" style={{ marginBottom: 8 }}>
         <label className="lbl" style={{ flex: 1 }}>Backup folder (USB/cloud) — an encrypted copy is written here daily
-          <input className="in" value={st.backupFolder || ''} placeholder="e.g. D:\Attendory Backups" onChange={e => mut(x => x.backupFolder = e.target.value)} /></label>
-        <label className="lbl" style={{ flex: 1 }}>Sync folder — app writes <code>attendory-sync.json</code> here; same path on every PC keeps them in sync
+          <input className="in" value={st.backupFolder || ''} placeholder="e.g. D:\Rentory Backups" onChange={e => mut(x => x.backupFolder = e.target.value)} /></label>
+        <label className="lbl" style={{ flex: 1 }}>Sync folder — app writes <code>rentory-sync.json</code> here; same path on every PC keeps them in sync
           <input className="in" value={st.syncFolder || ''} placeholder="e.g. \\OFFICE2\shared" onChange={e => mut(x => x.syncFolder = e.target.value)} /></label>
       </div>
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, fontSize: 13 }}>

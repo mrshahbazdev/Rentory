@@ -1,46 +1,40 @@
-// Attendory document model — HR office: employees, shifts, attendance punches,
-// leaves, loans/advances khata, payroll runs, final settlement.
+// Rentory document model — rent/property register: properties → units → tenants,
+// monthly rent bills, payment receipts, deposit khata, meters, expenses.
 // Design rules:
-// - punches are never deleted on import — re-importing a date replaces only
-//   imported rows for that date.
-// - payslips keep their computed lines — later edits to heads don't rewrite
-//   history.
-// - payslip and settlement numbers are gap-free, allocated at issue time.
-// - loan money moves only through loanMoves (issue/emi/payment/waiver).
+// - bill numbers are gap-free, allocated at generation time (per month).
+// - receipt numbers are gap-free; a voided receipt keeps its row (never deleted).
+// - a paid bill is never rewritten — arrears roll into the NEXT bill.
+// - tenant balances live only in receipts/bills/deposit moves; no cached totals
+//   are ever trusted as truth — always recompute.
 
 export const uid = (p = 'x') => p + Math.random().toString(36).slice(2, 10);
 export const fmt = (n, cur = 'Rs') => `${cur} ${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 export const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
-export const day = iso => (iso || '').slice(0, 10);
 export const today = () => new Date().toISOString().slice(0, 10);
 export const ym = iso => (iso || '').slice(0, 7);
-export const toMin = hhmm => { const [h, m] = String(hhmm || '0:0').split(':').map(Number); return (h || 0) * 60 + (m || 0); };
-export const fromMin = m => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-export const dow = dateStr => new Date(dateStr + 'T00:00:00').getDay(); // 0=Sun
+export const addMonths = (m, k) => { const [y, mo] = m.split('-').map(Number); const d = new Date(y, mo - 1 + k, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 
 export const ROLES = {
-  hr: 'HR manager — full access',
-  accountant: 'Accountant — payroll & loans, no leave approval',
-  supervisor: 'Supervisor — attendance & leaves, no money',
-  clerk: 'Clerk — employee records only'
+  owner: 'Owner — full access',
+  manager: 'Manager — bills, receipts & meters, no user management',
+  collector: 'Collector — receive payments & mark meters only',
+  clerk: 'Clerk — units & tenant records only'
 };
 
 export function emptyStore() {
   return {
     version: 1,
-    departments: [],   // {id, name}
-    employees: [],     // {id, code, name, designation, department_id, cnic, phone, whatsapp, address, doj, status:'active'|'left', left_on, basic, shift_id, bank, photo}
-    shifts: [],        // {id, name, start, end, grace_min, off_days:[dow]}
-    punches: [],       // {id, employee_id, date, in, out, status:'P'|'A'|'L'|'H'|'P/2', late_min, work_min, ot_min, source, marked_by}
-    leaveTypes: [],    // {id, name, quota, paid}
-    leaves: [],        // {id, employee_id, type_id, from, to, days, reason, status:'pending'|'approved'|'rejected', decided_by, decided_on}
-    loans: [],         // {id, employee_id, kind:'loan'|'advance', principal, taken_on, emi, start_month, status:'open'|'settled'|'waived', note}
-    loanMoves: [],     // {id, loan_id, date, kind:'issue'|'emi'|'payment'|'waiver'|'settlement', amount, payslip_id, by}
-    salaryHeads: [],   // {id, name, type:'earning'|'deduction', amount}
-    payslips: [],      // {id, no, employee_id, month, issued_on, lines:[{name,type,amount}], gross, deduct, net, status:'issued'|'paid'|'void', paid_on}
-    settlements: [],   // {id, no, employee_id, date, lines, net, note}
+    properties: [],   // {id, name, address}
+    units: [],        // {id, property_id, code, kind:'shop'|'flat'|'house'|'room'|'plot'|'other', floor, size, rent, status:'vacant'|'occupied', metered:bool}
+    tenants: [],      // {id, unit_id, name, father, cnic, phone, whatsapp, address, rent, deposit, advance, moved_in, moved_out, status:'active'|'left', note}
+    bills: [],        // {id, no, tenant_id, month, issued_on, lines:[{name,amount}], arrears, total, due_date, status:'unpaid'|'partial'|'paid'|'void', void_reason}
+    receipts: [],     // {id, no, tenant_id, bill_id|null, date, amount, mode:'cash'|'bank'|'online'|'cheque', ref, status:'received'|'void', void_reason, voided_on, by}
+    depositMoves: [], // {id, tenant_id, date, kind:'received'|'refund'|'forfeit'|'adjust', amount, note, receipt_no}
+    meters: [],       // {id, unit_id, tenant_id, month, prev, curr, units, rate, amount, status:'open'|'billed'}
+    expenses: [],     // {id, date, property_id, head, amount, note, by}
     auditLog: [],
     settings: defaultSettings(),
+    counters: { bill: 0, receipt: 0 },
     updatedAt: Date.now()
   };
 }
@@ -49,9 +43,9 @@ export function defaultSettings() {
   return {
     companyName: '', companyAddress: '', companyPhone: '',
     currency: 'Rs',
-    workingDays: 26,          // denominator for daily wage
-    otMultiplier: 1.5,        // OT hour rate = hourly wage × this
-    salaryFooter: 'Barah-e-karam salary slip tehwar ke tor par sambhalein.',
+    dueDay: 10,             // bills due by this day of month
+    lateFee: 0,             // flat late fee added to next bill when unpaid past due
+    receiptFooter: 'Barah-e-karam receipt sambhal kar rakhein.',
     letterheadOffset: 0,
     users: [],
     backupFolder: '', lastBackupAt: '',
@@ -62,277 +56,192 @@ export function defaultSettings() {
 }
 
 // ---------- lookups ----------
-export function emp(store, id) { return (store.employees || []).find(e => e.id === id) || null; }
-export function empByCode(store, code) {
-  const c = String(code || '').trim().toLowerCase();
-  return (store.employees || []).find(e => String(e.code || '').toLowerCase() === c) || null;
-}
-export function shift(store, id) { return (store.shifts || []).find(s => s.id === id) || null; }
-export function empShift(store, e) { return (e && shift(store, e.shift_id)) || (store.shifts || [])[0] || null; }
-export function dept(store, id) { return (store.departments || []).find(d => d.id === id) || null; }
-export function activeEmployees(store) { return (store.employees || []).filter(e => e.status !== 'left'); }
+export const prop = (s, id) => (s.properties || []).find(p => p.id === id) || null;
+export const unit = (s, id) => (s.units || []).find(u => u.id === id) || null;
+export const tenant = (s, id) => (s.tenants || []).find(t => t.id === id) || null;
+export const bill = (s, id) => (s.bills || []).find(b => b.id === id) || null;
+export const activeTenants = s => (s.tenants || []).filter(t => t.status === 'active');
+export const tenantUnit = (s, t) => (t && unit(s, t.unit_id)) || null;
+export const unitLabel = (s, u) => u ? `${prop(s, u.property_id)?.name || ''} — ${u.code}` : '';
+export const tenantLabel = (s, t) => t ? `${t.name} (${unitLabel(s, tenantUnit(s, t))})` : '';
 
-// ---------- attendance ----------
-export function isOffDay(store, e, dateStr) {
-  const sh = empShift(store, e);
-  return sh ? (sh.off_days || []).includes(dow(dateStr)) : dow(dateStr) === 0;
-}
-export function punchFor(store, empId, dateStr) {
-  return (store.punches || []).find(p => p.employee_id === empId && p.date === dateStr) || null;
-}
-export function punchesOn(store, dateStr) { return (store.punches || []).filter(p => p.date === dateStr); }
-export function punchesInMonth(store, empId, monthStr) {
-  return (store.punches || []).filter(p => p.employee_id === empId && ym(p.date) === monthStr);
-}
+// ---------- money flows ----------
+export function receiptsFor(s, tenantId) { return (s.receipts || []).filter(r => r.tenant_id === tenantId && r.status !== 'void'); }
+export function billsFor(s, tenantId) { return (s.bills || []).filter(b => b.tenant_id === tenantId && b.status !== 'void'); }
 
-// Compute status + flags from in/out times against the employee's shift.
-export function computePunch(store, e, dateStr, inT, outT) {
-  const sh = empShift(store, e);
-  let status = 'P', late_min = 0, work_min = 0, ot_min = 0;
-  if (!inT && !outT) return { status: 'A', late_min: 0, work_min: 0, ot_min: 0 };
-  if (inT && sh && sh.start) {
-    const late = toMin(inT) - toMin(sh.start);
-    if (late > num(sh.grace_min)) late_min = late;
-  }
-  if (inT && outT) work_min = Math.max(0, toMin(outT) - toMin(inT));
-  else if (inT) { status = 'P/2'; } // forgot to punch out
-  if (sh && sh.start && sh.end && work_min) {
-    const shiftMin = Math.max(0, toMin(sh.end) - toMin(sh.start));
-    if (work_min > shiftMin) ot_min = work_min - shiftMin;
-  }
-  return { status, late_min, work_min, ot_min };
+export function billPaid(s, b) {
+  return receiptsFor(s, b.tenant_id).filter(r => r.bill_id === b.id).reduce((t, r) => t + num(r.amount), 0);
+}
+export function billOutstanding(s, b) {
+  if (b.status === 'void') return 0;
+  return Math.max(0, num(b.total) - billPaid(s, b));
+}
+export function refreshBillStatus(b, paid) {
+  if (b.status === 'void') return b;
+  b.status = paid <= 0 ? 'unpaid' : paid >= num(b.total) ? 'paid' : 'partial';
+  return b;
 }
 
-export function setPunch(store, empId, dateStr, fields, by, source = 'manual') {
-  store.punches = store.punches || [];
-  let row = store.punches.find(p => p.employee_id === empId && p.date === dateStr);
-  if (!row) { row = { id: uid('pu'), employee_id: empId, date: dateStr }; store.punches.push(row); }
-  Object.assign(row, fields, { source, marked_by: by });
-  return row;
+// arrears carried into a new bill = outstanding on all previous bills
+export function tenantArrears(s, tenantId, beforeMonth) {
+  return billsFor(s, tenantId)
+    .filter(b => b.month < beforeMonth)
+    .reduce((t, b) => t + billOutstanding(s, b), 0);
 }
 
-export function attSummary(store, empId, monthStr) {
-  let p = 0, a = 0, l = 0, h = 0, half = 0, ot = 0, late = 0;
-  for (const r of punchesInMonth(store, empId, monthStr)) {
-    if (r.status === 'P') p++;
-    else if (r.status === 'A') a++;
-    else if (r.status === 'L') l++;
-    else if (r.status === 'H') h++;
-    else if (r.status === 'P/2') half++;
-    ot += num(r.ot_min); if (num(r.late_min) > 0) late++;
-  }
-  return { p, a, l, h, half, ot, late, marked: p + a + l + h + half };
+// unallocated credit: receipts not tied to a bill, minus nothing — shown as balance
+export function tenantBalance(s, tenantId) {
+  const billed = billsFor(s, tenantId).reduce((t, b) => t + num(b.total), 0);
+  const received = receiptsFor(s, tenantId).reduce((t, r) => t + num(r.amount), 0);
+  return received - billed; // negative = owes
 }
 
-// Approved leave covering a date → 'L'; applied when marking/importing.
-export function leaveOn(store, empId, dateStr) {
-  return (store.leaves || []).find(l =>
-    l.employee_id === empId && l.status === 'approved' && l.from <= dateStr && l.to >= dateStr) || null;
+export function depositBalance(s, tenantId) {
+  return (s.depositMoves || []).filter(m => m.tenant_id === tenantId)
+    .reduce((t, m) => t + (m.kind === 'received' ? num(m.amount) : -num(m.amount)), 0);
 }
 
-// ---------- leaves ----------
-export function leaveBalance(store, empId, typeId, yearStr) {
-  const t = (store.leaveTypes || []).find(x => x.id === typeId);
-  const quota = t ? num(t.quota) : 0;
-  const used = (store.leaves || [])
-    .filter(l => l.employee_id === empId && l.type_id === typeId && l.status === 'approved' && ym(l.from) <= (yearStr || today()).slice(0, 7) && String(ym(l.from)).startsWith(String(yearStr || today().slice(0, 4))))
-    .reduce((s, l) => s + num(l.days), 0);
-  return { quota, used, left: Math.max(0, quota - used) };
-}
-export function leaveDaysBetween(a, b) {
-  return Math.max(0, Math.round((Date.parse(b) - Date.parse(a)) / 86400000) + 1);
-}
-
-// ---------- loans ----------
-export function loanBalance(store, loanId) {
-  const ln = (store.loans || []).find(l => l.id === loanId);
-  if (!ln) return 0;
-  const moves = (store.loanMoves || []).filter(m => m.loan_id === loanId);
-  const issued = moves.filter(m => m.kind === 'issue').reduce((s, m) => s + num(m.amount), 0) || num(ln.principal);
-  const repaid = moves.filter(m => m.kind !== 'issue').reduce((s, m) => s + num(m.amount), 0);
-  return Math.max(0, issued - repaid);
-}
-export function loanDueThisMonth(store, loan, monthStr) {
-  if (loan.status !== 'open' || !num(loan.emi) || (loan.start_month || monthStr) > monthStr) return 0;
-  return Math.min(num(loan.emi), loanBalance(store, loan.id));
-}
-export function empLoans(store, empId) { return (store.loans || []).filter(l => l.employee_id === empId && l.status === 'open'); }
-
-// ---------- payroll ----------
-export function dailyWage(store, e) {
-  const days = num(store.settings.workingDays) || 26;
-  return num(e.basic) / days;
-}
-export function hourlyWage(store, e) {
-  const sh = empShift(store, e);
-  const shiftMin = sh && sh.start && sh.end ? Math.max(1, toMin(sh.end) - toMin(sh.start)) : 480;
-  return dailyWage(store, e) / (shiftMin / 60);
-}
-
-// The computed slip lines for an employee + month (without writing anything).
-export function payrollLines(store, e, monthStr) {
-  const lines = [{ name: 'Basic salary', type: 'earning', amount: num(e.basic) }];
-  for (const h of (store.salaryHeads || [])) {
-    if (num(h.amount)) lines.push({ name: h.name, type: h.type, amount: num(h.amount) });
-  }
-  const sum = attSummary(store, e.id, monthStr);
-  if (sum.ot) {
-    const otPay = Math.round(hourlyWage(store, e) * (sum.ot / 60) * (num(store.settings.otMultiplier) || 1));
-    if (otPay > 0) lines.push({ name: `Overtime (${Math.round(sum.ot / 60 * 10) / 10}h)`, type: 'earning', amount: otPay });
-  }
-  if (sum.a) lines.push({ name: `Absent days (${sum.a})`, type: 'deduction', amount: Math.round(dailyWage(store, e) * sum.a) });
-  if (sum.half) lines.push({ name: `Half days / missed punch (${sum.half})`, type: 'deduction', amount: Math.round(dailyWage(store, e) * sum.half * 0.5) });
-  const unpaidLv = (store.leaves || []).filter(l =>
-    l.employee_id === e.id && l.status === 'approved' && ym(l.from) <= monthStr && ym(l.to) >= monthStr &&
-    ((store.leaveTypes || []).find(t => t.id === l.type_id) || {}).paid === false);
-  for (const l of unpaidLv) {
-    const d1 = ym(l.from) === monthStr ? l.from : monthStr + '-01';
-    const d2 = ym(l.to) === monthStr ? l.to : monthStr + '-31';
-    const d = Math.min(num(l.days), leaveDaysBetween(d1, d2));
-    if (d > 0) lines.push({ name: `Unpaid leave (${d}d)`, type: 'deduction', amount: Math.round(dailyWage(store, e) * d) });
-  }
-  for (const ln of empLoans(store, e.id)) {
-    const due = loanDueThisMonth(store, ln, monthStr);
-    if (due > 0) lines.push({ name: `${ln.kind === 'advance' ? 'Advance' : 'Loan'} installment`, type: 'deduction', amount: due, loan_id: ln.id });
-  }
-  return lines;
-}
-export function slipTotals(lines) {
-  const gross = lines.filter(l => l.type === 'earning').reduce((t, l) => t + num(l.amount), 0);
-  const deduct = lines.filter(l => l.type === 'deduction').reduce((t, l) => t + num(l.amount), 0);
-  return { gross, deduct, net: Math.max(0, gross - deduct) };
-}
-export function payslipFor(store, empId, monthStr) {
-  return (store.payslips || []).find(p => p.employee_id === empId && p.month === monthStr && p.status !== 'void') || null;
-}
-export function nextSlipNo(store) { return (store.payslips || []).reduce((m, p) => Math.max(m, num(p.no)), 0) + 1; }
-export function nextSettleNo(store) { return (store.settlements || []).reduce((m, p) => Math.max(m, num(p.no)), 0) + 1; }
-
-// Run payroll for a month: creates slips (skips issued) and records EMI moves.
-export function runPayroll(store, monthStr, by) {
-  const made = [];
-  for (const e of activeEmployees(store)) {
-    if (payslipFor(store, e.id, monthStr)) continue;
-    const lines = payrollLines(store, e, monthStr);
-    const { gross, deduct, net } = slipTotals(lines);
-    const slip = { id: uid('ps'), no: nextSlipNo(store), employee_id: e.id, month: monthStr, issued_on: today(), lines, gross, deduct, net, status: 'issued', paid_on: '', paid_by: '' };
-    store.payslips = store.payslips || [];
-    store.payslips.push(slip);
-    store.loanMoves = store.loanMoves || [];
-    for (const l of lines) {
-      if (l.loan_id) store.loanMoves.push({ id: uid('lm'), loan_id: l.loan_id, date: today(), kind: 'emi', amount: l.amount, payslip_id: slip.id, by });
+// ---------- month-end: generate bills ----------
+export function generateMonthBills(store, month, opts = {}) {
+  const made = [], skipped = [];
+  for (const t of activeTenants(store)) {
+    if ((store.bills || []).some(b => b.tenant_id === t.id && b.month === month && b.status !== 'void')) {
+      skipped.push(t.name); continue;
     }
-    made.push(slip);
+    const u = tenantUnit(store, t);
+    const arrears = tenantArrears(store, t.id, month);
+    const lines = [{ name: `Rent ${month}`, amount: num(t.rent ?? u?.rent) }];
+    // meter bill for this month if open reading exists
+    const m = (store.meters || []).find(x => x.tenant_id === t.id && x.month === month && x.status === 'open');
+    if (m && num(m.amount) > 0) { lines.push({ name: `Electricity ${m.units} units`, amount: num(m.amount) }); m.status = 'billed'; }
+    if (arrears > 0 && num(store.settings.lateFee) > 0) lines.push({ name: 'Late fee', amount: num(store.settings.lateFee) });
+    const total = lines.reduce((x, l) => x + num(l.amount), 0) + arrears;
+    store.counters.bill = (store.counters.bill || 0) + 1;
+    const b = {
+      id: uid('b'), no: store.counters.bill, tenant_id: t.id, month,
+      issued_on: today(), lines, arrears, total,
+      due_date: `${month}-${String(store.settings.dueDay || 10).padStart(2, '0')}`,
+      status: 'unpaid'
+    };
+    store.bills.push(b); made.push(b);
   }
-  return made;
+  return { made, skipped };
 }
 
-// Final settlement for an employee leaving: unpaid days this month + loan balance.
-export function settlementLines(store, e) {
-  const lines = [];
-  const daysWorked = punchesInMonth(store, e.id, today().slice(0, 7))
-    .filter(p => p.status === 'P' || p.status === 'P/2').length;
-  const paidThisMonth = (store.payslips || []).some(p => p.employee_id === e.id && p.month === today().slice(0, 7) && p.status === 'paid');
-  if (!paidThisMonth && daysWorked) lines.push({ name: `Wages — ${daysWorked} days worked (${today().slice(0, 7)})`, type: 'earning', amount: Math.round(dailyWage(store, e) * daysWorked) });
-  for (const ln of empLoans(store, e.id)) {
-    const bal = loanBalance(store, ln.id);
-    if (bal > 0) lines.push({ name: `${ln.kind === 'advance' ? 'Advance' : 'Loan'} balance`, type: 'deduction', amount: bal });
-  }
-  return lines;
-}
-
-// ---------- sample data: fictional company, fully populated on first launch ----------
-export function sampleStore() {
-  const st = emptyStore();
-  const deptSales = { id: uid('dp'), name: 'Sales' };
-  const deptOps = { id: uid('dp'), name: 'Operations' };
-  const deptOffice = { id: uid('dp'), name: 'Office' };
-  st.departments = [deptSales, deptOps, deptOffice];
-
-  const shDay = { id: uid('sh'), name: 'Day shift', start: '09:00', end: '17:00', grace_min: 10, off_days: [0] };
-  const shEve = { id: uid('sh'), name: 'Evening shift', start: '14:00', end: '22:00', grace_min: 10, off_days: [0] };
-  st.shifts = [shDay, shEve];
-
-  st.leaveTypes = [
-    { id: uid('lt'), name: 'Annual leave', quota: 14, paid: true },
-    { id: uid('lt'), name: 'Sick leave', quota: 10, paid: true },
-    { id: uid('lt'), name: 'Casual leave', quota: 10, paid: true },
-    { id: uid('lt'), name: 'Unpaid leave', quota: 0, paid: false },
-  ];
-  const LT = n => st.leaveTypes.find(t => t.name.startsWith(n)).id;
-
-  st.salaryHeads = [
-    { id: uid('hd'), name: 'House rent', type: 'earning', amount: 5000 },
-    { id: uid('hd'), name: 'Conveyance', type: 'earning', amount: 2000 },
-    { id: uid('hd'), name: 'EOBI / social', type: 'deduction', amount: 400 },
-  ];
-
-  const emps = [
-    ['E001', 'Imran Baig', 'Store manager', deptOps.id, '35202-1111111-1', '0301-1111111', 65000, shDay.id],
-    ['E002', 'Sana Riaz', 'Sales executive', deptSales.id, '35202-2222222-2', '0302-2222222', 48000, shDay.id],
-    ['E003', 'Waqas Ali', 'Technician', deptOps.id, '35202-3333333-3', '0303-3333333', 42000, shEve.id],
-    ['E004', 'Hira Shah', 'Accounts assistant', deptOffice.id, '35202-4444444-4', '0304-4444444', 40000, shDay.id],
-    ['E005', 'Danish Mirza', 'Driver', deptOps.id, '35202-5555555-5', '0305-5555555', 35000, shEve.id],
-    ['E006', 'Rabia Noor', 'Receptionist', deptOffice.id, '35202-6666666-6', '0306-6666666', 32000, shDay.id],
-  ];
-  st.employees = emps.map(([code, name, designation, department_id, cnic, phone, basic, shift_id], i) => ({
-    id: uid('em'), code, name, designation, department_id, cnic, phone, whatsapp: phone,
-    address: '', doj: `2024-0${(i % 9) + 1}-1${i}`, status: 'active', basic, shift_id, bank: ''
-  }));
-  const E = c => st.employees.find(e => e.code === c);
-
-  // Attendance for this month (up to today) + last month full-ish.
-  const now = today();
-  const thisM = ym(now);
-  const lastD = new Date(now + 'T00:00:00'); lastD.setMonth(lastD.getMonth() - 1);
-  const lastM = ym(lastD.toISOString());
-  const seedPunch = (e, d, inT, outT) => {
-    const c = computePunch(st, e, d, inT, outT);
-    st.punches.push({ id: uid('pu'), employee_id: e.id, date: d, in: inT, out: outT, ...c, source: 'import', marked_by: 'sample' });
+// receive a payment: allocate to a bill if given; returns receipt
+export function receivePayment(store, { tenant_id, bill_id, amount, mode, ref, date }, by) {
+  store.counters.receipt = (store.counters.receipt || 0) + 1;
+  const r = {
+    id: uid('r'), no: store.counters.receipt, tenant_id, bill_id: bill_id || null,
+    date: date || today(), amount: num(amount), mode: mode || 'cash', ref: ref || '',
+    status: 'received', by: by || ''
   };
-  for (const e of st.employees) {
-    for (let mth of [lastM, thisM]) {
-      const maxDay = mth === thisM ? Number(now.slice(8, 10)) : new Date(Number(mth.slice(0, 4)), Number(mth.slice(5, 7)), 0).getDate();
-      for (let dd = 1; dd <= maxDay; dd++) {
-        const d = `${mth}-${String(dd).padStart(2, '0')}`;
-        if (isOffDay(st, e, d)) continue;
-        const sh = empShift(st, e);
-        const r = (dd + Number(e.code.slice(1))) % 10;
-        if (r === 9) { seedPunch(e, d, '', ''); continue; }               // an absent day
-        const inMin = toMin(sh.start) + (r === 7 ? 18 : r === 8 ? 5 : 0); // occasional late
-        const outMin = toMin(sh.end) + (r <= 3 ? 45 : 0);                 // occasional OT
-        seedPunch(e, d, fromMin(inMin), fromMin(outMin));
-      }
-    }
+  store.receipts.push(r);
+  if (bill_id) { const b = bill(store, bill_id); if (b) refreshBillStatus(b, billPaid(store, b)); }
+  return r;
+}
+
+export function voidReceipt(store, receiptId, reason) {
+  const r = (store.receipts || []).find(x => x.id === receiptId);
+  if (!r || r.status === 'void') return null;
+  r.status = 'void'; r.void_reason = reason || ''; r.voided_on = today();
+  if (r.bill_id) { const b = bill(store, r.bill_id); if (b) refreshBillStatus(b, billPaid(store, b)); }
+  return r;
+}
+
+export function voidBill(store, billId, reason) {
+  const b = bill(store, billId);
+  if (!b || b.status === 'void' || billPaid(store, b) > 0) return null;
+  b.status = 'void'; b.void_reason = reason || '';
+  return b;
+}
+
+// ---------- meters ----------
+export function lastMeterReading(store, unitId, beforeMonth) {
+  const ms = (store.meters || []).filter(m => m.unit_id === unitId && m.month < beforeMonth).sort((a, b) => b.month.localeCompare(a.month));
+  return ms[0] ? num(ms[0].curr) : 0;
+}
+
+// ---------- reports ----------
+export function monthSummary(store, month) {
+  const bills = (store.bills || []).filter(b => b.month === month && b.status !== 'void');
+  const receipts = (store.receipts || []).filter(r => ym(r.date) === month && r.status !== 'void');
+  const expenses = (store.expenses || []).filter(e => ym(e.date) === month);
+  return {
+    billed: bills.reduce((t, b) => t + num(b.total), 0),
+    collected: receipts.reduce((t, r) => t + num(r.amount), 0),
+    expenses: expenses.reduce((t, e) => t + num(e.amount), 0),
+    billCount: bills.length
+  };
+}
+
+export function defaulters(store, asOfMonth) {
+  const out = [];
+  for (const t of activeTenants(store)) {
+    const owes = billsFor(store, t.id).filter(b => b.month <= asOfMonth).reduce((x, b) => x + billOutstanding(store, b), 0);
+    if (owes > 0) out.push({ tenant: t, owes, oldest: billsFor(store, t.id).find(b => billOutstanding(store, b) > 0)?.month || '' });
   }
+  return out.sort((a, b) => b.owes - a.owes);
+}
 
-  // One approved leave (sick) + one pending request + one unpaid leave.
-  const e3 = E('E003');
-  st.leaves.push({ id: uid('lv'), employee_id: e3.id, type_id: LT('Sick'), from: `${thisM}-05`, to: `${thisM}-06`, days: 2, reason: 'Fever', status: 'approved', decided_by: 'sample', decided_on: today() });
-  st.leaves.push({ id: uid('lv'), employee_id: E('E002').id, type_id: LT('Casual'), from: now, to: now, days: 1, reason: 'Family work', status: 'pending' });
-  st.leaves.push({ id: uid('lv'), employee_id: E('E005').id, type_id: LT('Unpaid'), from: `${lastM}-20`, to: `${lastM}-21`, days: 2, reason: 'Travel', status: 'approved', decided_by: 'sample', decided_on: lastM + '-19' });
-  for (const l of st.leaves.filter(l => l.status === 'approved')) {
-    for (let d = l.from; d <= l.to; d = new Date(Date.parse(d) + 86400000).toISOString().slice(0, 10)) {
-      const row = st.punches.find(p => p.employee_id === l.employee_id && p.date === d);
-      if (row) { row.status = 'L'; row.late_min = 0; row.ot_min = 0; }
-      else st.punches.push({ id: uid('pu'), employee_id: l.employee_id, date: d, in: '', out: '', status: 'L', late_min: 0, work_min: 0, ot_min: 0, source: 'leave', marked_by: 'sample' });
-    }
-  }
+export function waLink(phone, text) {
+  const d = String(phone || '').replace(/\D/g, '');
+  if (!d) return null;
+  const intl = d.startsWith('92') ? d : d.startsWith('0') ? '92' + d.slice(1) : d;
+  return `https://wa.me/${intl}?text=${encodeURIComponent(text)}`;
+}
 
-  // A loan with EMI + one advance repaid manually.
-  const ln = { id: uid('ln'), employee_id: E('E002').id, kind: 'loan', principal: 60000, taken_on: lastM + '-05', emi: 10000, start_month: thisM, status: 'open', note: 'Personal loan' };
-  st.loans.push(ln);
-  st.loanMoves.push({ id: uid('lm'), loan_id: ln.id, date: ln.taken_on, kind: 'issue', amount: 60000, by: 'sample' });
-  st.loanMoves.push({ id: uid('lm'), loan_id: ln.id, date: lastM + '-28', kind: 'payment', amount: 10000, by: 'sample' });
-  st.loans.push({ id: uid('ln'), employee_id: E('E004').id, kind: 'advance', principal: 15000, taken_on: thisM + '-03', emi: 5000, start_month: thisM, status: 'open', note: 'Salary advance' });
-  st.loanMoves.push({ id: uid('lm'), loan_id: st.loans[1].id, date: thisM + '-03', kind: 'issue', amount: 15000, by: 'sample' });
-
-  // Last month's payroll already run + paid.
-  runPayroll(st, lastM, 'sample');
-  for (const p of st.payslips) { p.status = 'paid'; p.paid_on = lastM + '-30'; p.paid_by = 'sample'; }
-
-  st.settings.companyName = 'Al-Falah Traders';
-  st.settings.companyAddress = 'Plot 22, Industrial Area, Lahore';
-  st.settings.companyPhone = '042-35201234';
-  return st;
+// ---------- sample data ----------
+export function sampleStore() {
+  const s = emptyStore();
+  s.settings.companyName = 'Al-Falah Properties';
+  s.settings.companyAddress = 'Main Bazaar, Gujranwala';
+  s.settings.companyPhone = '055-5550100';
+  const p1 = { id: 'p1', name: 'Falah Plaza', address: 'Shop line, Main Bazaar' };
+  const p2 = { id: 'p2', name: 'Rehman House', address: 'Street 4, Model Town' };
+  s.properties = [p1, p2];
+  const u = (id, pid, code, kind, rent, metered) => ({ id, property_id: pid, code, kind, floor: 'ground', size: '', rent, metered: !!metered, status: 'occupied' });
+  s.units = [
+    u('u1', 'p1', 'Shop 1', 'shop', 25000, true), u('u2', 'p1', 'Shop 2', 'shop', 25000, true),
+    u('u3', 'p1', 'Office 3', 'room', 15000, false),
+    { ...u('u4', 'p2', 'Ground floor', 'house', 40000, true), status: 'vacant' },
+    u('u5', 'p2', 'First floor', 'house', 35000, true)
+  ];
+  const t = (id, uid_, name, phone, rent, dep, moved) => ({ id, unit_id: uid_, name, father: '', cnic: '', phone, whatsapp: phone, address: '', rent, deposit: dep, advance: 0, moved_in: moved, status: 'active', note: '' });
+  s.tenants = [
+    t('t1', 'u1', 'Riaz Ahmed — General Store', '0300-1112233', 25000, 50000, '2025-06-01'),
+    t('t2', 'u2', 'Khan Mobile Zone', '0321-5556677', 25000, 50000, '2025-09-01'),
+    t('t3', 'u3', 'Adv. Shahid (office)', '0333-8889900', 15000, 30000, '2026-01-15'),
+    t('t5', 'u5', 'Bilal Family', '0345-7778889', 35000, 70000, '2025-11-01')
+  ];
+  s.depositMoves = s.tenants.map((x, i) => ({ id: 'dm' + i, tenant_id: x.id, date: x.moved_in, kind: 'received', amount: x.deposit, note: 'Security deposit', receipt_no: i + 1 }));
+  const m0 = addMonths(today().slice(0, 7), -1);
+  const m1 = today().slice(0, 7);
+  // last month: bills all paid except t2 owes 10k
+  const mkBill = (ten, month, no, rent, arrears, status) => {
+    const b = { id: uid('b'), no, tenant_id: ten, month, issued_on: month + '-01', lines: [{ name: `Rent ${month}`, amount: rent }], arrears, total: rent + arrears, due_date: month + '-10', status };
+    s.bills.push(b); return b;
+  };
+  let n = 0;
+  const b1 = mkBill('t1', m0, ++n, 25000, 0, 'paid');
+  const b2 = mkBill('t2', m0, ++n, 25000, 0, 'partial');
+  const b3 = mkBill('t3', m0, ++n, 15000, 0, 'paid');
+  const b5 = mkBill('t5', m0, ++n, 35000, 0, 'paid');
+  s.counters.bill = n;
+  const rc = (ten, bill_, amt, date, mode) => { s.counters.receipt++; s.receipts.push({ id: uid('r'), no: s.counters.receipt, tenant_id: ten, bill_id: bill_, date, amount: amt, mode: mode || 'cash', ref: '', status: 'received', by: 'owner' }); };
+  rc('t1', b1.id, 25000, m0 + '-05'); rc('t2', b2.id, 15000, m0 + '-07');
+  rc('t3', b3.id, 15000, m0 + '-03', 'bank'); rc('t5', b5.id, 35000, m0 + '-04');
+  // this month bills generated for all
+  mkBill('t1', m1, ++n, 25000, 0, 'paid'); rc('t1', s.bills[s.bills.length - 1].id, 25000, m1 + '-04');
+  mkBill('t2', m1, ++n, 25000, 10000, 'unpaid');   // arrears carried
+  mkBill('t3', m1, ++n, 15000, 0, 'unpaid');
+  mkBill('t5', m1, ++n, 35000, 0, 'unpaid');
+  s.counters.bill = n;
+  s.meters = [
+    { id: uid('m'), unit_id: 'u1', tenant_id: 't1', month: m1, prev: 1200, curr: 1345, units: 145, rate: 32, amount: 4640, status: 'open' },
+    { id: uid('m'), unit_id: 'u5', tenant_id: 't5', month: m1, prev: 3410, curr: 3570, units: 160, rate: 32, amount: 5120, status: 'open' }
+  ];
+  s.expenses = [{ id: uid('e'), date: m0 + '-12', property_id: 'p1', head: 'Repair — plumbing', amount: 4500, note: '', by: 'owner' }];
+  s.settings.firstRunDone = false;
+  return s;
 }

@@ -1,5 +1,5 @@
 // Web shim for LAN host mode: when the bundle runs in a plain browser (the
-// main PC's Attendory serves it over the LAN), window.api is missing — provide
+// main PC's Rentory serves it over the LAN), window.api is missing — provide
 // a fetch-based equivalent talking to the host's /api endpoints. The access
 // code is entered once and held in memory only (never the URL/history).
 export function installWebApi() {
@@ -14,7 +14,7 @@ export function installWebApi() {
   };
   const apiFetch = async (path, opts = {}) => {
     await ask();
-    const res = await fetch(path, { ...opts, headers: { 'x-attendory-token': code, ...(opts.headers || {}) } });
+    const res = await fetch(path, { ...opts, headers: { 'x-rentory-token': code, ...(opts.headers || {}) } });
     if (res.status === 401) { sessionStorage.removeItem('att-code'); return apiFetch(path, opts); }
     return res;
   };

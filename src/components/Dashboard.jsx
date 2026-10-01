@@ -1,51 +1,49 @@
-import { num, fmt, today, ym, attSummary, punchesOn, activeEmployees, loanBalance } from '../lib/model.js';
+import React from 'react';
+import { fmt, num, activeTenants, monthSummary, defaulters, tenantUnit, unitLabel, billsFor, billOutstanding, today, ym } from '../lib/model.js';
 
 export default function Dashboard({ store, update, go }) {
-  const cur = store.settings.currency || 'Rs';
-  const emps = activeEmployees(store);
-  const t = today();
-  const rows = punchesOn(store, t);
-  const present = rows.filter(r => r.status === 'P').length;
-  const absent = rows.filter(r => r.status === 'A').length;
-  const onLeave = rows.filter(r => r.status === 'L').length;
-  const unmarked = emps.length - rows.length;
-  const m = ym(t);
-  const slipsThis = (store.payslips || []).filter(p => p.month === m && p.status !== 'void');
-  const payrollTotal = slipsThis.reduce((s, p) => s + num(p.net), 0);
-  const pendingLeaves = (store.leaves || []).filter(l => l.status === 'pending').length;
-  const loansOut = (store.loans || []).filter(l => l.status === 'open').reduce((s, l) => s + loanBalance(store, l.id), 0);
-  const lateToday = rows.filter(r => num(r.late_min) > 0).length;
-  const monthOt = emps.reduce((s, e) => s + attSummary(store, e.id, m).ot, 0);
-
-  const Card = ({ label, val, sub, warn }) => (
-    <div className="pcard" style={{ flex: 1, minWidth: 160 }}>
-      <div className="muted" style={{ fontSize: 12 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 700, color: warn ? '#dc2626' : '#0f172a' }}>{val}</div>
-      {sub && <div className="muted" style={{ fontSize: 11 }}>{sub}</div>}
-    </div>
-  );
-
+  const m = today().slice(0, 7);
+  const sum = monthSummary(store, m);
+  const defs = defaulters(store, m);
+  const units = store.units || [];
+  const occ = units.filter(u => u.status === 'occupied').length;
+  const rentRoll = activeTenants(store).reduce((t, x) => t + num(x.rent), 0);
+  const dueSoon = (store.bills || []).filter(b => b.status === 'unpaid' && b.due_date <= today());
   return (
-    <div className="panel" style={{ maxWidth: 1100 }}>
-      <h2 className="ptitle">Today — {t}</h2>
-      <div className="frow" style={{ gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
-        <Card label="Present" val={present} sub={`of ${emps.length} employees`} />
-        <Card label="Absent" val={absent} warn={absent > 0} />
-        <Card label="On leave" val={onLeave} />
-        <Card label="Unmarked" val={unmarked} warn={unmarked > 0} />
-        <Card label="Late arrivals" val={lateToday} warn={lateToday > 0} />
+    <div className="panel">
+      <h2 className="ptitle">Dashboard — {m}</h2>
+      <div className="cards">
+        <div className="pcard"><div className="clabel">Collected this month</div><div className="cval">{fmt(sum.collected, store.settings.currency)}</div></div>
+        <div className="pcard"><div className="clabel">Billed this month</div><div className="cval">{fmt(sum.billed, store.settings.currency)}</div><div className="muted">{sum.billCount} bills</div></div>
+        <div className="pcard"><div className="clabel">Occupancy</div><div className="cval">{occ}/{units.length}</div><div className="muted">{units.length - occ} vacant</div></div>
+        <div className="pcard"><div className="clabel">Rent roll / month</div><div className="cval">{fmt(rentRoll, store.settings.currency)}</div></div>
+        <div className="pcard" style={{ borderColor: defs.length ? '#f59e0b' : undefined }}><div className="clabel">Defaulters</div><div className="cval">{defs.length}</div><div className="muted">owe {fmt(defs.reduce((t, d) => t + d.owes, 0), store.settings.currency)}</div></div>
+        <div className="pcard"><div className="clabel">Expenses this month</div><div className="cval">{fmt(sum.expenses, store.settings.currency)}</div></div>
       </div>
-      <h2 className="ptitle">This month — {m}</h2>
-      <div className="frow" style={{ gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
-        <Card label="Payroll cost" val={fmt(payrollTotal, cur)} sub={`${slipsThis.length} slips`} />
-        <Card label="Overtime" val={`${Math.round(monthOt / 60 * 10) / 10}h`} />
-        <Card label="Pending leaves" val={pendingLeaves} warn={pendingLeaves > 0} />
-        <Card label="Loans outstanding" val={fmt(loansOut, cur)} />
-      </div>
-      <div className="frow" style={{ gap: 10 }}>
-        <button className="btn" onClick={() => go('attendance')}>Mark attendance</button>
-        <button className="btn ghost" onClick={() => go('payroll')}>Payroll</button>
-        <button className="btn ghost" onClick={() => go('leaves')}>Leave requests</button>
+
+      {dueSoon.length > 0 && (
+        <div className="pcard" style={{ marginTop: 14, borderLeft: '3px solid #dc2626' }}>
+          <b>{dueSoon.length} bill(s) past due date</b> — collect karne ke liye Bills pe jayen.
+        </div>
+      )}
+
+      <h3 className="ptitle" style={{ fontSize: 15, marginTop: 18 }}>Top defaulters</h3>
+      <table className="grid">
+        <thead><tr><th>Tenant</th><th>Unit</th><th>Oldest unpaid</th><th className="r">Owes</th><th></th></tr></thead>
+        <tbody>
+          {defs.slice(0, 8).map(d => (
+            <tr key={d.tenant.id}>
+              <td>{d.tenant.name}</td><td>{unitLabel(store, tenantUnit(store, d.tenant))}</td>
+              <td>{d.oldest}</td><td className="r">{fmt(d.owes, store.settings.currency)}</td>
+              <td><button className="btn small ghost" onClick={() => go('bills')}>Collect</button></td>
+            </tr>
+          ))}
+          {!defs.length && <tr><td colSpan="5" className="muted">Koi defaulter nahi — sab clear.</td></tr>}
+        </tbody>
+      </table>
+      <div className="frow" style={{ marginTop: 14 }}>
+        <button className="btn" onClick={() => go('bills')}>Month-end: generate bills</button>
+        <button className="btn ghost" onClick={() => go('reports')}>Reports</button>
       </div>
     </div>
   );

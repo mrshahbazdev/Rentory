@@ -1,6 +1,6 @@
 {
- "name": "attendory",
- "productName": "Attendory",
+ "name": "rentory",
+ "productName": "Rentory",
  "description": "Offline HR attendance & payroll office for small businesses.",
  "author": {
   "name": "Muhammad Shahbaz",
@@ -19,8 +19,8 @@
   "dist:win": "npm run build && electron-builder --win --x64"
  },
  "build": {
-  "appId": "com.shahbaz.attendory",
-  "productName": "Attendory",
+  "appId": "com.shahbaz.rentory",
+  "productName": "Rentory",
   "copyright": "Copyright \u00a9 2026 Muhammad Shahbaz",
   "asar": true,
   "asarUnpack": [
@@ -58,9 +58,9 @@
    "icon": "build/icon.ico"
   },
   "appx": {
-   "applicationId": "Attendory",
-   "displayName": "Attendory",
-   "identityName": "MuhammadShahbaz.Attendory",
+   "applicationId": "Rentory",
+   "displayName": "Rentory",
+   "identityName": "MuhammadShahbaz.Rentory",
    "publisher": "CN=82C2C857-730F-4239-B80D-4F1C7E03E8B4",
    "publisherDisplayName": "Muhammad Shahbaz",
    "backgroundColor": "#0f172a",

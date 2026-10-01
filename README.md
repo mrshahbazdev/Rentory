@@ -1,20 +1,19 @@
-# Attendory
+# Rentory
 
-Offline HR attendance & payroll office for small businesses — employees & departments, shifts with grace/OT rules, daily attendance grid + biometric/CSV punch import, leave quota & approvals, loan/advance khata with EMI salary deductions, payroll runs with payslips & salary sheet, final settlement, and reports. No account, no subscription, no internet.
+Offline rent & property register for landlords and property dealers — properties & units, tenants with deposit khata, monthly rent bills with arrears, payment receipts, electricity meters, expenses, and reports. No account, no subscription, no internet.
 
 ## Features
 
-- **Employees** — codes, designations, departments, CNIC, salary, shift; bulk CSV/Excel import with preview; per-employee loan balance column
-- **Shifts** — start/end times, grace minutes, per-shift weekly-off days; late arrivals and overtime flagged automatically
-- **Attendance** — daily marking grid (P/A/L/H/½), in/out time fields, mark-all-present, monthly register print, **CSV/biometric punch import** (`code,date,in,out`), anomalies list (late by shift grace)
-- **Leaves** — types with yearly quota (annual/sick/casual + unpaid), approve/reject flow that writes leave marks into attendance, per-employee balance view
-- **Loans & advances** — issue with EMI + start month; installments auto-deduct inside the payroll run; manual payments, waivers, per-loan ledger; nothing is deleted — movements only
-- **Payroll** — month run computes basic + salary heads + OT pay − absent days − half days − unpaid leave − loan EMI; gap-free payslip numbers, print A5 slip, print A4 landscape salary sheet, mark paid, **void rolls back its loan deductions**
-- **Final settlement** — one click for a leaving employee: unpaid worked days + open loan balances → printable memo, employee marked left, loans closed
-- **Reports** — monthly attendance %, late days, OT hours per employee; payroll cost by department; loans outstanding; leave usage
-- **Privacy** — SQLCipher-encrypted local database; PIN-locked roles (hr / accountant / supervisor / clerk); first-run consent screen; nothing leaves the PC unless you opt in to LAN sharing
-- **LAN** — opt-in host mode serves the app to office PCs in a browser with an access code, plus pair-code app-to-app sync and a shared-folder sync file
-- **Sample data** — fictional "Al-Falah Traders" (6 employees, 2 shifts, punches, leaves, a loan, last month's payroll) so every screen is demonstrable on first launch
+- **Properties & units** — multiple properties; units with kind (shop/flat/house/room/plot), rent, floor, metered flag; vacant/occupied tracked automatically on move-in/move-out
+- **Tenants** — contact, CNIC, WhatsApp, rent & security deposit, move-in/out; bulk CSV/Excel import; per-tenant khata (billed vs paid vs outstanding), printable statement, WhatsApp reminder (wa.me link, message pre-filled)
+- **Rent bills** — one-click month-end generation for every active tenant: rent + open meter amount + arrears carried from earlier unpaid bills + optional late fee; gap-free bill numbers; void-with-reason (row kept, never deleted)
+- **Receipts** — cash/bank/online/cheque with reference; gap-free receipt numbers; **void rolls back the bill status but keeps the receipt row**; printable receipt (A5) and bill
+- **Meters** — per-unit monthly electricity readings: prev auto-fills from last month, units × rate becomes a line on the next rent bill and locks
+- **Expenses** — per-property expense register feeding the day-book/net report
+- **Reports** — 6-month billed/collected/net trend, per-property occupancy & rent roll, defaulter list with oldest unpaid month, printable collection register & occupancy report
+- **Privacy** — SQLCipher-encrypted local database; PIN-locked roles (owner / manager / collector / clerk); first-run consent; nothing leaves the PC unless you opt in to LAN sharing
+- **LAN** — opt-in host mode serves the app to other PCs in a browser with an access code, plus pair-code app-to-app sync and shared-folder sync
+- **Sample data** — fictional "Al-Falah Properties" (2 properties, 5 units, 4 tenants, bills, receipts, a partial defaulter, meters) so every screen works on first launch
 
 ## Run
 
@@ -22,7 +21,7 @@ Offline HR attendance & payroll office for small businesses — employees & depa
 npm install
 npm run dev        # vite + electron
 npm run build      # web bundle only
-npm run dist:win   # signed-less .appx (Windows)
+npm run dist:win   # unsigned .appx (Windows)
 ```
 
-Data lives in an encrypted `attendory.db` in the OS user-data folder. `attendory.json` backups export/import from the sidebar.
+Data lives in an encrypted `rentory.db` in the OS user-data folder. JSON backups export/import from the sidebar.

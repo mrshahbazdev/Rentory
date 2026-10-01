@@ -7,14 +7,14 @@ const { readDoc, hashPins } = require('./ipc/doc-io.cjs');
 
 /**
  * SQLite document store (better-sqlite3-multiple-ciphers → SQLCipher).
- * - attendory.db lives in userData, encrypted with a random key (the key itself
+ * - rentory.db lives in userData, encrypted with a random key (the key itself
  *   is wrapped by OS safeStorage / DPAPI and kept in db.key next to the
  *   database).
  * - WAL + foreign keys on; every write is record-level inside one transaction.
  * - mergeSave diffs the client's doc against the doc that client last loaded
  *   (tracked by rev) and applies ONLY the rows that client changed — so two
  *   tills/counters on different PCs no longer overwrite each other.
- * - Never put attendory.db on a network share: SMB locking corrupts SQLite.
+ * - Never put rentory.db on a network share: SMB locking corrupts SQLite.
  *   The multi-PC path stays host + HTTP.
  */
 
@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at T
 CREATE TABLE IF NOT EXISTS records (collection TEXT, id TEXT, data TEXT NOT NULL, updated TEXT, PRIMARY KEY (collection, id));
 `;
 
-// Collections with dedicated tables; everything else (departments, shifts,
-// leaves, loans, ...) lands in `records`.
+// Collections with dedicated tables; everything else (properties, units,
+// tenants, bills, receipts, meters, expenses, ...) lands in `records`.
 const DEDICATED = new Set(['employees', 'punches', 'payslips']);
 
 let db = null;
@@ -67,7 +67,7 @@ function openDb() {
     throw new Error('OS encryption unavailable — cannot open encrypted store database');
   }
   const dir = app.getPath('userData');
-  db = new Database(path.join(dir, 'attendory.db'));
+  db = new Database(path.join(dir, 'rentory.db'));
   db.pragma(`key='${keyForDb()}'`);
   db.exec(TABLES);
   revCounter = Number((db.prepare(`SELECT v FROM meta WHERE k='rev'`).get() || {}).v || 0);
@@ -75,20 +75,20 @@ function openDb() {
   return db;
 }
 
-// ---- migration: one-shot import of the legacy attendory.json ----
+// ---- migration: one-shot import of the legacy rentory.json ----
 function migrateFromJson() {
   const done = (db.prepare(`SELECT v FROM meta WHERE k='migrated'`).get() || {}).v;
   if (done) return;
   const doc = readDoc();
-  if (doc && Array.isArray(doc.employees)) {
-    const base = { version: 1, employees: [], settings: { users: [] } };
+  if (doc && (Array.isArray(doc.units) || Array.isArray(doc.tenants) || Array.isArray(doc.employees))) {
+    const base = { version: 1, settings: { users: [] } };
     applyChanges(diffDocs(base, doc), 'migration');
     saveSettings(doc.settings || {}, 'migration');
     if (doc.updatedAt) db.prepare(`INSERT OR REPLACE INTO meta (k, v) VALUES ('updatedAt', ?)`).run(String(doc.updatedAt));
     try {
       fs.renameSync(
-        path.join(app.getPath('userData'), 'attendory.json'),
-        path.join(app.getPath('userData'), 'attendory.json.migrated')
+        path.join(app.getPath('userData'), 'rentory.json'),
+        path.join(app.getPath('userData'), 'rentory.json.migrated')
       );
     } catch {}
   }

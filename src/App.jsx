@@ -1,40 +1,38 @@
 import { useEffect, useRef, useState } from 'react';
 import { installWebApi } from './lib/webapi.js';
 import { emptyStore, sampleStore, defaultSettings } from './lib/model.js';
-import { employeesCsv } from './lib/csv.js';
+import { tenantsCsv } from './lib/csv.js';
 import PinGate from './components/PinGate.jsx';
 import Dashboard from './components/Dashboard.jsx';
-import EmployeesPanel from './components/EmployeesPanel.jsx';
-import ShiftsPanel from './components/ShiftsPanel.jsx';
-import AttendancePanel from './components/AttendancePanel.jsx';
-import LeavesPanel from './components/LeavesPanel.jsx';
-import LoansPanel from './components/LoansPanel.jsx';
-import PayrollPanel from './components/PayrollPanel.jsx';
+import PropertiesPanel from './components/PropertiesPanel.jsx';
+import TenantsPanel from './components/TenantsPanel.jsx';
+import BillsPanel from './components/BillsPanel.jsx';
+import MetersPanel from './components/MetersPanel.jsx';
+import ExpensesPanel from './components/ExpensesPanel.jsx';
 import ReportsPanel from './components/ReportsPanel.jsx';
 import SettingsPanel from './components/SettingsPanel.jsx';
 
 installWebApi();
 
 const NAV = [
-  { section: 'HR', items: [
+  { section: 'Property', items: [
     { id: 'dashboard', label: 'Dashboard', ur: 'ڈیش بورڈ' },
-    { id: 'employees', label: 'Employees', ur: 'ملازمین' },
-    { id: 'shifts', label: 'Shifts', ur: 'شفٹیں' },
-    { id: 'attendance', label: 'Attendance', ur: 'حاضری' },
-    { id: 'leaves', label: 'Leaves', ur: 'چھٹیاں' },
+    { id: 'properties', label: 'Properties & units', ur: 'جائیداد' },
+    { id: 'tenants', label: 'Tenants', ur: 'کرایہ دار' },
   ]},
   { section: 'Money', items: [
-    { id: 'loans', label: 'Loans & advances', ur: 'قرضہ' },
-    { id: 'payroll', label: 'Payroll', ur: 'تنخواہ' },
+    { id: 'bills', label: 'Rent bills', ur: 'بل' },
+    { id: 'meters', label: 'Meters', ur: 'میٹر' },
+    { id: 'expenses', label: 'Expenses', ur: 'اخراجات' },
     { id: 'reports', label: 'Reports', ur: 'رپورٹس' },
   ]},
   { section: 'Setup', items: [{ id: 'settings', label: 'Settings', ur: 'ترتیبات' }] },
 ];
 const ROLE_TABS = {
-  hr: null,
-  accountant: ['dashboard', 'employees', 'attendance', 'leaves', 'loans', 'payroll', 'reports', 'settings'],
-  supervisor: ['dashboard', 'employees', 'shifts', 'attendance', 'leaves', 'reports'],
-  clerk: ['dashboard', 'employees', 'attendance'],
+  owner: null,
+  manager: ['dashboard', 'properties', 'tenants', 'bills', 'meters', 'expenses', 'reports'],
+  collector: ['dashboard', 'tenants', 'bills', 'meters'],
+  clerk: ['dashboard', 'properties', 'tenants'],
 };
 
 export default function App() {
@@ -95,7 +93,7 @@ export default function App() {
   });
 
   const backup = async () => {
-    const r = await window.api.export.json({ doc: store, suggestedName: `attendory-backup-${new Date().toISOString().slice(0, 10)}.json` });
+    const r = await window.api.export.json({ doc: store, suggestedName: `rentory-backup-${new Date().toISOString().slice(0, 10)}.json` });
     if (r?.ok) alert('Backup saved.');
   };
   const restore = async () => {
@@ -105,20 +103,20 @@ export default function App() {
       const doc = JSON.parse(f.text);
       if (!doc || !doc.version) throw 0;
       if (confirm('Replace all current data with this backup?')) setStore(doc);
-    } catch { alert('Not a valid Attendory backup file.'); }
+    } catch { alert('Not a valid Rentory backup file.'); }
   };
-  const exportCsv = () => window.api.export.text({ text: employeesCsv(store), suggestedName: 'attendory-employees.csv' });
+  const exportCsv = () => window.api.export.text({ text: tenantsCsv(store), suggestedName: 'rentory-tenants.csv' });
 
   if (!store) return <div style={{ padding: 40 }}>Loading…</div>;
   if (st.firstRunDone === false) {
     return (
       <div style={{ maxWidth: 560, margin: '8vh auto', padding: 24, background: '#fff', borderRadius: 12, boxShadow: '0 4px 24px #0002' }}>
-        <h2 style={{ marginTop: 0 }}>Attendory — offline HR register</h2>
-        <p>Attendory keeps your employee records, attendance, leaves, loans and payroll <b>on this computer only</b> — nothing is uploaded anywhere. Data stays in an encrypted database on this PC.</p>
+        <h2 style={{ marginTop: 0 }}>Rentory — offline rent register</h2>
+        <p>Rentory keeps your units, tenants, rent bills, receipts and deposits <b>on this computer only</b> — nothing is uploaded anywhere. Data stays in an encrypted database on this PC.</p>
         <ul style={{ lineHeight: 1.8, fontSize: 14 }}>
-          <li>Employee data you enter (names, CNIC, salary, attendance) is stored locally.</li>
-          <li>Optional LAN sharing syncs data only between PCs on your own office network.</li>
-          <li>A sample company is loaded so you can try every feature — reset it anytime in Settings.</li>
+          <li>Tenant data you enter (names, CNIC, rent, deposits) is stored locally.</li>
+          <li>Optional LAN sharing syncs data only between PCs on your own network.</li>
+          <li>A sample property is loaded so you can try every feature — reset it anytime in Settings.</li>
           <li>Keep a backup in Settings before uninstalling.</li>
         </ul>
         <button className="btn" onClick={() => update(s => { s.settings.firstRunDone = true; s.settings.consent = { accepted_on: new Date().toISOString(), version: 1 }; }, 'consent accepted')}>I understand — shuru karein</button>
@@ -130,12 +128,11 @@ export default function App() {
   const allowed = user ? (ROLE_TABS[user.role] || null) : null;
   const pages = {
     dashboard: <Dashboard store={store} update={update} go={setPage} />,
-    employees: <EmployeesPanel store={store} update={update} user={user} />,
-    shifts: <ShiftsPanel store={store} update={update} />,
-    attendance: <AttendancePanel store={store} update={update} user={user} />,
-    leaves: <LeavesPanel store={store} update={update} user={user} />,
-    loans: <LoansPanel store={store} update={update} user={user} />,
-    payroll: <PayrollPanel store={store} update={update} user={user} />,
+    properties: <PropertiesPanel store={store} update={update} />,
+    tenants: <TenantsPanel store={store} update={update} />,
+    bills: <BillsPanel store={store} update={update} user={user} />,
+    meters: <MetersPanel store={store} update={update} />,
+    expenses: <ExpensesPanel store={store} update={update} user={user} />,
     reports: <ReportsPanel store={store} update={update} />,
     settings: <SettingsPanel store={store} update={update} setStore={setStore} />,
   };
@@ -145,8 +142,8 @@ export default function App() {
     <div className="app">
       <aside className="side">
         <div className="brand">
-          <div className="logo">A</div>
-          <div><div className="bname">Attendory</div><div className="bsub">{st.companyName || 'HR register'}</div></div>
+          <div className="logo">R</div>
+          <div><div className="bname">Rentory</div><div className="bsub">{st.companyName || 'Rent register'}</div></div>
         </div>
         {NAV.map(g => (
           <div key={g.section} className="ngroup">
