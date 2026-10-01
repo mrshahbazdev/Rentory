@@ -1,7 +1,7 @@
 {
  "name": "rentory",
  "productName": "Rentory",
- "description": "Offline HR attendance & payroll office for small businesses.",
+ "description": "Offline HR attendance and payroll office for small businesses.",
  "author": {
   "name": "Muhammad Shahbaz",
   "email": "mrshahbaznns@gmail.com"
@@ -65,13 +65,9 @@
    "publisherDisplayName": "Muhammad Shahbaz",
    "backgroundColor": "#0f172a",
    "addAutoLaunchExtension": false,
-   "capabilities": [
-    "privateNetworkClientServer"
-   ],
    "languages": [
     "en-US"
-   ],
-   "icon": "build/icon.png"
+   ]
   },
   "nsis": {
    "oneClick": false,
